@@ -1,0 +1,28 @@
+# ========== 编译生成物 ==========
+# 说明：bin/ 整体被忽略，但已发布的 Release 单文件 exe
+#       （bin/Release/net8.0-windows/win-x64/publish/BetterWebLauncher.exe）
+#       已用 git add -f 强制纳入版本管理，构建后可执行 git add -u 更新它。
+bin/
+obj/
+
+# 旧版本备份目录（含历史 exe 与中间产物）
+_backup_before_ui_update/
+
+# ========== IDE / 工具 ==========
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# ========== 杂项 ==========
+*.log
+*.tmp
+*.bak
+*.old
+*.previous
+*.after
+*.cache
+Thumbs.db
+desktop.ini
