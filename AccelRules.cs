@@ -16,12 +16,12 @@ namespace BetterWebLauncher
     /// <summary>
     /// 一条加速规则：把若干域名映射到一组上游端点。
     ///
-    /// 参数完全对照 Steamcommunity 302 v15 生成的 Caddy 配置（generated.caddyfile）：
-    ///   DirectIp     → reverse_proxy https://&lt;ip&gt; + tls_server_name &lt;sni&gt;
-    ///   RelayDomain  → reverse_proxy https://&lt;relay-host&gt;（可选 header_up Host 改写）
-    ///   StripCookies → header_up -Cookie / header_down -Cookie
+    /// 三个可调维度：
+    ///   DirectIp     → 直连边缘 IP，并指定 SNI 前置
+    ///   RelayDomain  → 走中继域名（可选改写 Host）
+    ///   StripCookies → 转发时不带 Cookie（上下行都剥掉）
     ///   RedirectTo   → redir &lt;url&gt;
-    /// 负载均衡与失败判定沿用 Caddy 的取值：dial_timeout 2s / fail_duration 30s / max_fails 2。
+    /// 负载均衡与失败判定取值：dial_timeout 2s / fail_duration 30s / max_fails 2。
     /// </summary>
     public sealed class AccelRule
     {
@@ -44,17 +44,17 @@ namespace BetterWebLauncher
         /// <summary>
         /// 连上游时使用的 TLS SNI：
         ///   null → 使用客户端请求的原始主机名；
-        ///   其他 → 固定值（SNI 前置，对应 Caddy 的 tls_server_name）。
+        ///   其他 → 固定值（SNI 前置）。
         /// </summary>
         public string? UpstreamSni { get; init; }
 
         /// <summary>
-        /// 发给上游的 Host 头（对应 Caddy 的 header_up Host）：
+        /// 发给上游的 Host 头：
         ///   null → 保持客户端原始主机名（{host}）。
         /// </summary>
         public string? UpstreamHost { get; init; }
 
-        /// <summary>非空时直接把请求 302 到该地址（对应 Caddy 的 redir）。</summary>
+        /// <summary>非空时直接把请求重定向（HTTP 302）到该地址，不走上游。</summary>
         public string? RedirectTo { get; init; }
 
         /// <summary>上游 TCP 端口。</summary>
@@ -63,7 +63,7 @@ namespace BetterWebLauncher
         /// <summary>请求 / 响应都把 Cookie 剥掉（下载类中继需要）。</summary>
         public bool StripCookies { get; init; }
 
-        /// <summary>上游连接超时（毫秒），对应 Caddy dial_timeout 2s。</summary>
+        /// <summary>上游连接超时（毫秒）。</summary>
         public int DialTimeoutMs { get; init; } = 2000;
 
         /// <summary>是否写入 hosts。个别域名（如 Google 存储）只做 SNI 分流，不改 hosts。</summary>
@@ -73,16 +73,16 @@ namespace BetterWebLauncher
     /// <summary>GitHub + Discord 的加速规则集合，随程序编译进来，不依赖外部配置文件。</summary>
     public static class AccelRules
     {
-        /// <summary>上游轮询总时长，对应 Caddy 的 lb_try_duration。</summary>
+        /// <summary>上游轮询总时长：在这个时间窗内不断换下一条线路重试。</summary>
         public const int TryDurationMs = 8000;
 
-        /// <summary>上游失败后冷却时长，对应 Caddy 的 fail_duration。</summary>
+        /// <summary>上游失败后冷却时长：这段时间内不再选它。</summary>
         public const int FailDurationMs = 30000;
 
-        /// <summary>连续失败多少次后判定不可用，对应 Caddy 的 max_fails。</summary>
+        /// <summary>连续失败多少次后判定不可用。</summary>
         public const int MaxFails = 2;
 
-        /// <summary>每条上游最多尝试次数，对应 Caddy 的 lb_policy random_choose 2。</summary>
+        /// <summary>每条上游最多尝试次数。</summary>
         public const int MaxAttempts = 2;
 
         public static readonly AccelRule[] All = BuildAll();
@@ -124,7 +124,7 @@ namespace BetterWebLauncher
 
         // ------------------------------------------------------------------
         // 规则定义
-        // 上游地址、SNI、Host 改写全部取自 S302 v15 的 generated.caddyfile。
+        // 每条记录 = 一组域名 + 一组上游端点 + 连接参数（SNI / Host 改写 / Cookie 处理）。
         // ------------------------------------------------------------------
         private static AccelRule[] BuildAll() => new[]
         {
@@ -412,7 +412,7 @@ namespace BetterWebLauncher
             {
                 Id = "images-ext.discordapp.net",
                 Group = "Discord",
-                Description = "Discord 外链图片反向代理（302 到 media 域名）",
+                Description = "Discord 外链图片反向代理（重定向到 media 域名）",
                 Domains = new[] { "images-ext-2.discordapp.net", "images-ext-1.discordapp.net" },
                 Kind = AccelUpstreamKind.RelayDomain,
                 Endpoints = new[] { "media.discordapp.net" },   // 不会真正连接，只用于占位
@@ -493,7 +493,7 @@ namespace BetterWebLauncher
                     "chromedriver.storage.googleapis.com", "mongodb.storage.googleapis.com",
                 },
                 UpstreamSni = "uploads",
-                EnableHosts = false,   // 原版同样不改 hosts，只做 SNI 分流
+                EnableHosts = false,   // 该域名不做 hosts 改写，只按 SNI 分流
             },
         };
     }

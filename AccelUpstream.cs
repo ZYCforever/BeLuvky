@@ -13,9 +13,9 @@ namespace BetterWebLauncher
     /// <summary>
     /// 上游连接工厂。
     ///
-    /// 对照 S302（Caddy）的两个关键设置：
-    ///   tls_server_name &lt;sni&gt;                       → 这里通过 SslClientAuthenticationOptions.TargetHost 实现
-    ///   tls_trusted_ca_certs / skip 证书校验            → 这里始终接受上游证书（只加密、不校验链）
+    /// 两个关键设置：
+    ///   指定 SNI                        → 通过 SslClientAuthenticationOptions.TargetHost 实现
+    ///   不校验上游证书链                 → 始终接受上游证书（只加密，不校验）
     /// 上游证书不校验是刻意的：SNI 前置时证书本来就和主机名对不上。
     /// </summary>
     public sealed class AccelUpstreamConnector

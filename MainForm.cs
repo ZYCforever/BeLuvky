@@ -441,7 +441,7 @@ namespace BetterWebLauncher
             return row;
         }
 
-        // ---- 网站访问加速（内嵌的 Steamcommunity 302 功能） ----
+        // ---- 网站访问加速 ----
         private Control BuildAccelCard()
         {
             var card = new VsCard
@@ -518,7 +518,7 @@ namespace BetterWebLauncher
         // ------------------------------------------------------------------
         // 网站访问加速（GitHub / Discord）
         //
-        // 与 Steamcommunity 302 同样的做法：
+        // 做法：
         //   1. hosts 把目标域名指到 127.0.0.1；
         //   2. 本进程在 443 端口接住请求，用本地 CA 现场签发证书；
         //   3. 按域名选一条当前可用的上游线路转发出去（国内外均可直连的站点才这么做）。

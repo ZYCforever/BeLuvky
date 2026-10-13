@@ -12,17 +12,17 @@ namespace BetterWebLauncher
     /// <summary>
     /// 本地根证书 + 按需签发叶证书。
     ///
-    /// 对照 S302 的 Caddy 配置：
-    ///   pki { ca local { name "Steamcommunity302" } }   → 本地 CA
-    ///   tls { issuer internal { lifetime 72h } on_demand } → 叶证书有效期 72 小时、按需签发
-    /// 这里用 .NET 的 <see cref="CertificateRequest"/> 直接实现，不再需要 Caddy。
+    /// 要点：
+    ///   本地 CA 自签根证书，叶证书有效期 72 小时、按需签发（连到哪个域名就签哪个，
+    ///   不预先签一整套）；
+    /// 用 .NET 的 <see cref="CertificateRequest"/> 直接实现，不依赖外部代理程序。
     /// </summary>
     public sealed class CertificateAuthority
     {
         /// <summary>CA 主体名，装进“受信任的根证书颁发机构”后用户能看到这个名字。</summary>
         public const string CaCommonName = "BetterWebLauncher Local CA";
 
-        /// <summary>叶证书有效期（小时），对照 Caddy 的 lifetime 72h。</summary>
+        /// <summary>叶证书有效期（小时）。</summary>
         private const int LeafLifetimeHours = 72;
 
         private const int CaLifetimeYears = 10;

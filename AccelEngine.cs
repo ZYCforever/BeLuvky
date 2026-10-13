@@ -17,7 +17,7 @@ namespace BetterWebLauncher
     /// <summary>
     /// 本地加速引擎：在 127.0.0.1:443 上监听，按 SNI 把请求转发到可用的上游。
     ///
-    /// 工作流程（对照 S302 / Caddy 的行为）：
+    /// 工作流程：
     ///   1. 客户端因为 hosts 被改写而连到 127.0.0.1:443；
     ///   2. 读出 ClientHello 里的 SNI，得到真实目标主机名；
     ///   3. 用本地 CA 现场签发该域名的证书，完成 TLS 握手（客户端看到的是合法证书）；
@@ -251,7 +251,7 @@ namespace BetterWebLauncher
 
             if (rule.RedirectTo != null)
             {
-                // 对应原版里的 redir，例如 images-ext-2.discordapp.net → media.discordapp.net
+                // 直接回一个 302，例如 images-ext-2.discordapp.net → media.discordapp.net
                 await WriteRedirectAsync(ssl, rule.RedirectTo + request.Path, token).ConfigureAwait(false);
                 Report(request.Host, rule.RedirectTo, rule.Id, true, 302, 0, null);
                 return;
@@ -528,7 +528,7 @@ namespace BetterWebLauncher
         /// <summary>
         /// 把规则里的端点写法拆成「主机 + 端口」。
         ///
-        /// 规则表照抄 Caddy 配置，端点写的是 https://20.205.243.166 或 https://dlds.steam302.xyz
+        /// 规则表里的端点写成 https://20.205.243.166 或 https://relay.example.com
         /// 这种带协议的 URL；TcpClient 只认主机名，所以这里统一剥掉协议和路径，
         /// 未显式写端口时用规则上的 UpstreamPort（默认 443）。
         /// </summary>

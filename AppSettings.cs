@@ -30,7 +30,7 @@ namespace BetterWebLauncher
         /// <summary>断线自动重连的尝试间隔（秒）：失败后每隔这么久重试一次。</summary>
         public int ReconnectIntervalSeconds { get; set; } = DefaultReconnectIntervalSeconds;
 
-        // ---------- 网站访问加速（内嵌的 Steamcommunity 302 功能） ----------
+        // ---------- 网站访问加速 ----------
 
         /// <summary>是否启用网站访问加速（本地代理 + hosts 劫持）。</summary>
         public bool AccelerationEnabled { get; set; } = false;

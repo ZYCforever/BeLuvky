@@ -8,8 +8,8 @@ namespace BetterWebLauncher
     /// 网站访问加速的服务选择窗口。
     ///
     /// 只开放「加速哪些站点」这一个选择：GitHub 一组、Discord 一组。
-    /// 具体线路、域名、负载均衡参数都已经按 Steamcommunity 302 的行为固化在
-    /// <see cref="AccelRules"/> 里，没有必要（也不应该）让用户手工填。
+    /// 具体线路、域名、负载均衡参数都已经固化在 <see cref="AccelRules"/> 里，
+    /// 没有必要（也不应该）让用户手工填。
     /// </summary>
     public sealed class AccelSettingsForm : Form
     {

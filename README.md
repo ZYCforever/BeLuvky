@@ -5,7 +5,7 @@ Windows 宽带（PPPoE）自动拨号 + 断线自动重连小工具，采用 VS 
 程序启动后自动调用系统 `rasdial` 拨号；运行期间每秒检测一次网络接口状态，
 一旦掉线就按设定的间隔自动重拨，并把日志写到界面上。除了拨号本身，
 还带一个整机 / 本程序的资源占用监视面板，以及内置的 **网站访问加速**
-（把 Steamcommunity 302 的能力直接做进了程序，不需要另装工具）。
+（GitHub / Discord 这类线路绕远的站点，加速能力直接做进了程序）。
 
 ---
 
@@ -27,15 +27,17 @@ Windows 宽带（PPPoE）自动拨号 + 断线自动重连小工具，采用 VS 
 
 ## 网站访问加速
 
-内置了 Steamcommunity 302 的核心能力，**不需要再单独运行 302 工具**。
+内置了本地加速代理，针对 GitHub / Discord 这类**并没有主动封锁国内访问、只是线路绕远**
+的站点。它不做任何"翻墙"的事：域名和线路都是这些服务本来就对外开放的入口，
+只是把绕远的路径换成了更近的一条。
 
-与 302 相同的三步做法：
+三步做法：
 
 1. 把目标域名写进 `hosts` 指向 `127.0.0.1`；
 2. 程序自己在 `443` 端口接住这些请求，用本地 CA 现场签发对应域名的证书完成 TLS；
 3. 按域名挑一条当前能通的线路转发出去（直连边缘 IP + SNI 前置，或走加速中继）。
 
-覆盖范围（规则见 `AccelRules.cs`，全部对照 Steamcommunity 302 v15 的实际配置）：
+覆盖范围（规则见 `AccelRules.cs`）：
 
 | 服务 | 覆盖的域名 |
 | --- | --- |
@@ -132,7 +134,7 @@ dotnet publish -c Release
 | `AppSettings.cs` | 配置读写 + 密码 AES 加解密 |
 | `AccelRules.cs` | 加速规则表：域名 → 上游线路 / SNI / Host 改写 |
 | `AccelEngine.cs` | 本地加速代理：443 监听、SNI 分流、原始字节转发 |
-| `AccelCertificates.cs` | 本地 CA 与按需签发叶证书（对应 Caddy 的 internal issuer） |
+| `AccelCertificates.cs` | 本地 CA 与按需签发叶证书 |
 | `AccelUpstream.cs` | 上游连接：指定 IP/SNI 建 TLS，绕过被污染的解析结果 |
 | `AccelTls.cs` | ClientHello 解析（读 SNI）、加速日志与统计 |
 | `HostsFile.cs` | 带标记地改写 `hosts`，只动自己的条目并即时刷新 DNS 缓存 |

@@ -10,7 +10,7 @@ namespace BetterWebLauncher
     /// <summary>
     /// 从 TLS ClientHello 中读出 SNI。
     ///
-    /// S302 能用一条 443 端口把几十个域名分流出去，靠的就是 SNI：
+    /// 一个 443 端口能同时服务几十个域名，靠的就是 SNI：
     /// 客户端先发 ClientHello，我们从中知道对方想访问谁，再决定往哪个上游转发。
     /// </summary>
     public static class SniReader
