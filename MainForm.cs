@@ -54,6 +54,15 @@ namespace BetterWebLauncher
         /// <summary>性能监视窗口（非模态，单例）。</summary>
         private PerfForm? _perfForm;
 
+        // ---------- 网站访问加速 ----------
+        private VsCheckBox _chkAcceleration = null!;
+        private VsLabel _lblAccelState = null!;
+        private VsButton _btnAccelCert = null!;
+        private AccelEngine? _accel;
+        private CertificateAuthority? _ca;
+        private bool _accelBusy;
+        private ToolStripMenuItem? _trayAccel;
+
         private bool _connected;
         private bool _busy;
         private bool _reallyExit;
@@ -125,7 +134,7 @@ namespace BetterWebLauncher
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 5,
+                RowCount = 6,
                 Padding = new Padding(20, 10, 20, 10),
                 BackColor = Surface,
                 Margin = new Padding(0)
@@ -133,15 +142,17 @@ namespace BetterWebLauncher
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));   // 标题
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 240));  // 连接信息卡片
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));   // 网站加速
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));   // 操作按钮
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));   // 日志
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));   // 状态栏
 
             root.Controls.Add(BuildHeader(), 0, 0);
             root.Controls.Add(BuildInfoCard(), 0, 1);
-            root.Controls.Add(BuildActionBar(), 0, 2);
-            root.Controls.Add(BuildLogPanel(), 0, 3);
-            root.Controls.Add(BuildStatusBar(), 0, 4);
+            root.Controls.Add(BuildAccelCard(), 0, 2);
+            root.Controls.Add(BuildActionBar(), 0, 3);
+            root.Controls.Add(BuildLogPanel(), 0, 4);
+            root.Controls.Add(BuildStatusBar(), 0, 5);
 
             Controls.Add(root);
         }
@@ -430,6 +441,302 @@ namespace BetterWebLauncher
             return row;
         }
 
+        // ---- 网站访问加速（内嵌的 Steamcommunity 302 功能） ----
+        private Control BuildAccelCard()
+        {
+            var card = new VsCard
+            {
+                Dock = DockStyle.Fill,
+                BackColor = CardSurface,
+                Margin = new Padding(0, 0, 0, 14)
+            };
+
+            var row = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 4,
+                RowCount = 1,
+                BackColor = CardSurface,
+                Padding = new Padding(16, 0, 16, 0),
+                Margin = new Padding(0)
+            };
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 208));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 132));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 132));
+
+            _chkAcceleration = new VsCheckBox
+            {
+                Text = "网站访问加速 (GitHub / Discord)",
+                Dock = DockStyle.Fill,
+                Checked = _settings.AccelerationEnabled,
+                BackColor = CardSurface,
+                Margin = new Padding(0, 0, 8, 0)
+            };
+            _chkAcceleration.CheckedChanged += async (_, _) => await ToggleAccelerationAsync();
+
+            _lblAccelState = new VsLabel
+            {
+                Text = "未启用",
+                Dock = DockStyle.Fill,
+                Font = VsTheme.Ui(9F),
+                ForeColor = VsTheme.TextMuted,
+                BackColor = CardSurface,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(8, 0, 8, 0)
+            };
+
+            _btnAccelCert = new VsButton
+            {
+                Text = "安装根证书",
+                Kind = VsButtonKind.Secondary,
+                Dock = DockStyle.Fill,
+                BackColor = CardSurface,
+                Margin = new Padding(0, 7, 8, 7)
+            };
+            _btnAccelCert.Click += (_, _) => InstallRootCertificate();
+
+            var btnDetails = new VsButton
+            {
+                Text = "加速设置…",
+                Kind = VsButtonKind.Secondary,
+                Dock = DockStyle.Fill,
+                BackColor = CardSurface,
+                Margin = new Padding(0, 7, 0, 7)
+            };
+            btnDetails.Click += (_, _) => EditAccelServices();
+
+            row.Controls.Add(_chkAcceleration, 0, 0);
+            row.Controls.Add(_lblAccelState, 1, 0);
+            row.Controls.Add(_btnAccelCert, 2, 0);
+            row.Controls.Add(btnDetails, 3, 0);
+            card.Controls.Add(row);
+
+            return card;
+        }
+
+        // ------------------------------------------------------------------
+        // 网站访问加速（GitHub / Discord）
+        //
+        // 与 Steamcommunity 302 同样的做法：
+        //   1. hosts 把目标域名指到 127.0.0.1；
+        //   2. 本进程在 443 端口接住请求，用本地 CA 现场签发证书；
+        //   3. 按域名选一条当前可用的上游线路转发出去（国内外均可直连的站点才这么做）。
+        // 没有额外的驱动、没有常驻服务，关掉开关就把 hosts 恢复原样。
+        // ------------------------------------------------------------------
+        private async Task ToggleAccelerationAsync()
+        {
+            if (_accelBusy) return;
+            _accelBusy = true;
+
+            _chkAcceleration.Enabled = false;
+            try
+            {
+                if (_chkAcceleration.Checked)
+                    await StartAccelerationAsync();
+                else
+                    await StopAccelerationAsync();
+            }
+            finally
+            {
+                _chkAcceleration.Enabled = true;
+                _accelBusy = false;
+            }
+        }
+
+        private async Task StartAccelerationAsync()
+        {
+            if (_accel != null) return;
+
+            // 写 hosts 需要管理员权限，先确认能写再启动监听，避免出现半开状态
+            if (!HostsFile.CanWrite())
+            {
+                Log("无法修改 hosts 文件：请用管理员身份重新运行本程序。", LogLevel.Error);
+                _chkAcceleration.Checked = false;
+                UpdateAccelState();
+                return;
+            }
+
+            try
+            {
+                _ca ??= CertificateAuthority.LoadOrCreate();
+
+                _accel = new AccelEngine(_ca);
+                _accel.SetRules(SelectedAccelRules());
+                _accel.Log += OnAccelLog;
+                _accel.Start(_settings.AccelPort);
+
+                var domains = SelectedAccelDomains();
+                var written = HostsFile.Apply(domains);
+
+                _settings.AccelerationEnabled = true;
+                try { _settings.Save(); } catch { }
+
+                Log($"网站访问加速已启动：{written} 个域名 → 127.0.0.1:{_settings.AccelPort}" +
+                    $"（{(_settings.AccelGitHub ? "GitHub" : "")}{(_settings.AccelGitHub && _settings.AccelDiscord ? " + " : "")}{(_settings.AccelDiscord ? "Discord" : "")}）。",
+                    LogLevel.Success);
+            }
+            catch (Exception ex)
+            {
+                Log("启动网站加速失败：" + ex.Message, LogLevel.Error);
+                await StopAccelerationAsync();
+                _chkAcceleration.Checked = false;
+            }
+
+            UpdateAccelState();
+        }
+
+        private async Task StopAccelerationAsync()
+        {
+            try
+            {
+                if (_accel != null)
+                {
+                    _accel.Log -= OnAccelLog;
+                    await _accel.StopAsync();
+                    _accel.Dispose();
+                    _accel = null;
+                }
+
+                HostsFile.Remove();
+            }
+            catch (Exception ex)
+            {
+                Log("关闭网站加速时出错：" + ex.Message, LogLevel.Warn);
+            }
+
+            _settings.AccelerationEnabled = false;
+            try { _settings.Save(); } catch { }
+
+            Log("网站访问加速已停止，hosts 已恢复原样。");
+            UpdateAccelState();
+        }
+
+        /// <summary>按当前勾选的服务拼出规则列表。</summary>
+        private AccelRule[] SelectedAccelRules()
+        {
+            var list = new System.Collections.Generic.List<AccelRule>();
+            foreach (var rule in AccelRules.All)
+            {
+                if (rule.Group == "GitHub" && !_settings.AccelGitHub) continue;
+                if (rule.Group == "Discord" && !_settings.AccelDiscord) continue;
+                list.Add(rule);
+            }
+
+            return list.ToArray();
+        }
+
+        private System.Collections.Generic.List<string> SelectedAccelDomains()
+        {
+            var list = new System.Collections.Generic.List<string>();
+            var seen = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var rule in SelectedAccelRules())
+            {
+                if (!rule.EnableHosts) continue;
+                foreach (var domain in rule.Domains)
+                {
+                    var d = domain.Trim().ToLowerInvariant();
+                    if (d.Length == 0) continue;
+                    if (d.StartsWith("*.", StringComparison.Ordinal)) continue;
+                    if (seen.Add(d)) list.Add(d);
+                }
+            }
+
+            return list;
+        }
+
+        private void UpdateAccelState()
+        {
+            if (_lblAccelState == null) return;
+
+            if (_accel is { IsRunning: true })
+            {
+                var stats = _accel.Stats;
+                _lblAccelState.Text = $"运行中 · {HostsFile.CountApplied()} 个域名 · " +
+                                      $"{stats.Total} 次请求";
+                _lblAccelState.ForeColor = VsTheme.Accent;
+            }
+            else
+            {
+                _lblAccelState.Text = "未启用";
+                _lblAccelState.ForeColor = VsTheme.TextMuted;
+            }
+
+            if (_btnAccelCert != null && _ca != null)
+            {
+                bool trusted = _ca.IsTrustedForCurrentUser();
+                _btnAccelCert.Text = trusted ? "根证书已安装" : "安装根证书";
+                _btnAccelCert.Enabled = !trusted;
+            }
+
+            if (_trayAccel != null)
+                _trayAccel.Checked = _accel is { IsRunning: true };
+        }
+
+        private void InstallRootCertificate()
+        {
+            try
+            {
+                _ca ??= CertificateAuthority.LoadOrCreate();
+                _ca.TrustForCurrentUser();
+
+                _settings.AccelCaTrusted = _ca.IsTrustedForCurrentUser();
+                try { _settings.Save(); } catch { }
+
+                if (_settings.AccelCaTrusted)
+                {
+                    Log("本地根证书已安装到「受信任的根证书颁发机构」，浏览器不会再报证书错误。", LogLevel.Success);
+                }
+                else
+                {
+                    var file = _ca.ExportRootToFile();
+                    Log($"自动安装未成功，已导出证书到 {file}，请双击后选择「安装证书 → 受信任的根证书颁发机构」。", LogLevel.Warn);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("安装根证书失败：" + ex.Message, LogLevel.Error);
+            }
+
+            UpdateAccelState();
+        }
+
+        /// <summary>打开加速服务选择对话框（GitHub / Discord 分开开关）。</summary>
+        private void EditAccelServices()
+        {
+            using var dlg = new AccelSettingsForm(_settings);
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+            try { _settings.Save(); } catch { }
+
+            if (_accel is { IsRunning: true })
+            {
+                // 服务范围变了：重建 hosts 与规则
+                _accel.SetRules(SelectedAccelRules());
+                HostsFile.Apply(SelectedAccelDomains());
+                Log($"加速范围已更新：{HostsFile.CountApplied()} 个域名。");
+            }
+
+            UpdateAccelState();
+        }
+
+        private void OnAccelLog(AccelLogEntry entry)
+        {
+            if (IsDisposed) return;
+
+            if (InvokeRequired)
+            {
+                try { BeginInvoke(new Action(() => OnAccelLog(entry))); } catch { }
+                return;
+            }
+
+            if (!entry.Success && !string.IsNullOrEmpty(entry.Error))
+                Log($"加速 {entry.Host} 失败：{entry.Error}", LogLevel.Warn);
+
+            UpdateAccelState();
+        }
+
         // ---- 性能监视窗口 ----
         private void ShowPerfWindow()
         {
@@ -593,6 +900,14 @@ namespace BetterWebLauncher
 
             menu.Items.Add(MenuItem("显示主界面", (_, _) => RestoreFromTray()));
             menu.Items.Add(MenuItem("性能监视…", (_, _) => ShowPerfWindow()));
+
+            _trayAccel = MenuItem("网站加速", (_, _) =>
+            {
+                _chkAcceleration.Checked = !_chkAcceleration.Checked;
+            });
+            _trayAccel.CheckOnClick = false;
+            _trayAccel.Checked = _settings.AccelerationEnabled;
+            menu.Items.Add(_trayAccel);
             menu.Items.Add(MenuItem("立即拨号", async (_, _) =>
             {
                 _userHangup = false;
@@ -638,6 +953,13 @@ namespace BetterWebLauncher
 
             Log("BetterWebLauncher 已启动。");
             UpdateNetworkInfo();
+            UpdateAccelState();
+
+            // 上次退出时加速是开着的，这里自动恢复（hosts 可能已被系统还原，重新写入即可）
+            if (_settings.AccelerationEnabled && !_chkAcceleration.Checked)
+                _chkAcceleration.Checked = true;
+            else if (_settings.AccelerationEnabled)
+                await StartAccelerationAsync();
 
             if (_settings.AutoDialOnStart)
             {
@@ -659,6 +981,22 @@ namespace BetterWebLauncher
             _timer.Stop();
             _trayIcon.Visible = false;
             _trayIcon.Dispose();
+
+            // 退出前收尾：停掉本地代理并清掉 hosts 里我们加的条目，
+            // 否则用户关了程序，浏览器还会被指向一个已经没人监听的 127.0.0.1。
+            try
+            {
+                if (_accel != null)
+                {
+                    _accel.Log -= OnAccelLog;
+                    _accel.StopAsync().GetAwaiter().GetResult();
+                    _accel.Dispose();
+                    _accel = null;
+                }
+
+                HostsFile.Remove();
+            }
+            catch { }
 
             // 退出时一并关闭性能监视窗口
             try

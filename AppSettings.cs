@@ -30,6 +30,23 @@ namespace BetterWebLauncher
         /// <summary>断线自动重连的尝试间隔（秒）：失败后每隔这么久重试一次。</summary>
         public int ReconnectIntervalSeconds { get; set; } = DefaultReconnectIntervalSeconds;
 
+        // ---------- 网站访问加速（内嵌的 Steamcommunity 302 功能） ----------
+
+        /// <summary>是否启用网站访问加速（本地代理 + hosts 劫持）。</summary>
+        public bool AccelerationEnabled { get; set; } = false;
+
+        /// <summary>是否同时加速 GitHub 系列域名。</summary>
+        public bool AccelGitHub { get; set; } = true;
+
+        /// <summary>是否同时加速 Discord 系列域名。</summary>
+        public bool AccelDiscord { get; set; } = true;
+
+        /// <summary>本地监听端口。hosts 只能劫持到 443，一般不需要改。</summary>
+        public int AccelPort { get; set; } = 443;
+
+        /// <summary>已把本地根证书装进“受信任的根证书颁发机构”。</summary>
+        public bool AccelCaTrusted { get; set; } = false;
+
         /// <summary>把间隔限制在合法范围内（配置文件被手工改坏时也能兜住）。</summary>
         public static int ClampReconnectInterval(int seconds)
         {

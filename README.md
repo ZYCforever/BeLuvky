@@ -4,7 +4,8 @@ Windows 宽带（PPPoE）自动拨号 + 断线自动重连小工具，采用 VS 
 
 程序启动后自动调用系统 `rasdial` 拨号；运行期间每秒检测一次网络接口状态，
 一旦掉线就按设定的间隔自动重拨，并把日志写到界面上。除了拨号本身，
-还带一个整机 / 本程序的资源占用监视面板。
+还带一个整机 / 本程序的资源占用监视面板，以及内置的 **网站访问加速**
+（把 Steamcommunity 302 的能力直接做进了程序，不需要另装工具）。
 
 ---
 
@@ -14,12 +15,50 @@ Windows 宽带（PPPoE）自动拨号 + 断线自动重连小工具，采用 VS 
 | --- | --- |
 | 自动拨号 | 启动即拨号，连接名 / 账号 / 密码可配置 |
 | 断线自动重连 | 每秒检测接口状态，掉线后按设定间隔重试（1–3600 秒可调） |
+| 网站访问加速 | 内置本地代理，加速 GitHub / Discord 等线路绕远的站点 |
 | 记住密码 | 密码 AES 加密后存入本地配置，不落明文 |
 | 在线状态显示 | 实时显示连接状态、IP 地址、收发流量 |
 | 系统资源监控 | 整机 CPU / 内存占用、本程序 CPU / 内存 / 线程数 |
-| 开机自启 | 写入 `HKCU\...\Run`，仅当前用户，无需管理员权限 |
+| 开机自启 | 写入 `HKCU\...\Run`，仅当前用户 |
 | 托盘常驻 | 关闭窗口后最小化到托盘，继续后台监控与重连 |
 | 深色主题 | 自绘控件库，VS Code 配色 |
+
+---
+
+## 网站访问加速
+
+内置了 Steamcommunity 302 的核心能力，**不需要再单独运行 302 工具**。
+
+与 302 相同的三步做法：
+
+1. 把目标域名写进 `hosts` 指向 `127.0.0.1`；
+2. 程序自己在 `443` 端口接住这些请求，用本地 CA 现场签发对应域名的证书完成 TLS；
+3. 按域名挑一条当前能通的线路转发出去（直连边缘 IP + SNI 前置，或走加速中继）。
+
+覆盖范围（规则见 `AccelRules.cs`，全部对照 Steamcommunity 302 v15 的实际配置）：
+
+| 服务 | 覆盖的域名 |
+| --- | --- |
+| GitHub | `github.com`、`api.github.com`、`codeload`、`raw/avatars/objects.githubusercontent.com`、`*.github.io`、`github.githubassets.com` 等 |
+| Discord | `discord.com`、`discordapp.com`、`*.discord.gg`、`cdn/media/images-ext.discordapp.net`、`dl/dl2.discordapp.net`、各状态与支持站点 |
+
+只用**宿主文件 + 本地代理**这一种机制，没有驱动、没有系统服务、没有常驻后台进程：
+
+- 关闭开关会立即删除自己在 `hosts` 里写的全部条目（只删带 `#BWL` 后缀的，
+  以及自己 `BEGIN/END` 标记之间的内容），不会留下残留；
+- 程序退出时同样会自动清理并停止监听。
+
+### 首次使用
+
+因为要在本地解密 HTTPS，需要把程序的自签根证书装进
+「受信任的根证书颁发机构」。点界面上的 **安装根证书** 即可，
+也可以随时在 `certmgr.msc` 里删除。
+
+程序需要以**管理员身份**运行（改写 `hosts` 与监听 443 端口），
+`app.manifest` 里已声明 `requireAdministrator`，双击时会自动弹 UAC。
+
+> 说明：这里只加速 GitHub、Discord 这类并没有主动封锁国内访问、只是线路绕远的站点；
+> 已被对方主动限制的服务不在本功能范围内。
 
 ---
 
@@ -69,6 +108,11 @@ dotnet publish -c Release
 | `AutoReconnect` | `true` | 断线自动重连 |
 | `StartWithWindows` | `false` | 开机自启 |
 | `ReconnectIntervalSeconds` | `5` | 重连重试间隔（秒） |
+| `AccelerationEnabled` | `false` | 网站访问加速总开关 |
+| `AccelGitHub` | `true` | 加速 GitHub 系列域名 |
+| `AccelDiscord` | `true` | 加速 Discord 系列域名 |
+| `AccelPort` | `443` | 本地代理监听端口（hosts 只能指向 443，一般不改） |
+| `AccelCaTrusted` | `false` | 本地根证书是否已装进受信任根 |
 
 `RememberPassword` + `AutoDialOnStart` 且账号密码均非空时，
 程序会跳过登录窗口直接进入主界面（见 `Program.cs`）。
@@ -86,6 +130,13 @@ dotnet publish -c Release
 | `NetworkMonitor.cs` | 用 `NetworkInterface` 判断 PPPoE 是否在线，读取 IP 与流量 |
 | `SystemMonitor.cs` | 用 `GetSystemTimes` / `GlobalMemoryStatusEx` 采样 CPU、内存 |
 | `AppSettings.cs` | 配置读写 + 密码 AES 加解密 |
+| `AccelRules.cs` | 加速规则表：域名 → 上游线路 / SNI / Host 改写 |
+| `AccelEngine.cs` | 本地加速代理：443 监听、SNI 分流、原始字节转发 |
+| `AccelCertificates.cs` | 本地 CA 与按需签发叶证书（对应 Caddy 的 internal issuer） |
+| `AccelUpstream.cs` | 上游连接：指定 IP/SNI 建 TLS，绕过被污染的解析结果 |
+| `AccelTls.cs` | ClientHello 解析（读 SNI）、加速日志与统计 |
+| `HostsFile.cs` | 带标记地改写 `hosts`，只动自己的条目并即时刷新 DNS 缓存 |
+| `AccelSettingsForm.cs` | 加速服务选择窗口（GitHub / Discord 分开开关） |
 | `StartupManager.cs` | 通过 `HKCU` 的 `Run` 项实现开机自启 |
 | `PerfForm.cs` | 性能监视窗口（整机 + 本程序资源曲线） |
 | `VsTheme.cs` | VS Code 风格配色与主题常量 |
