@@ -42,6 +42,9 @@ namespace BetterWebLauncher
 
         private readonly SemaphoreSlim _slots = new(256, 256);
 
+        /// <summary>换下一条线路前的等待。测试可设为 0。</summary>
+        internal int RetryDelayMs { get; set; } = 150;
+
         /// <summary>
         /// 被 hosts 指向 127.0.0.1 的主机名。
         /// 连接这些名字时必须跳过系统解析，否则会连回自己。
@@ -275,6 +278,10 @@ namespace BetterWebLauncher
             var started = Environment.TickCount64;
             string? usedEndpoint = null;
 
+            // 响应头一旦回写给浏览器，就不能再补发 502 了。
+            bool headSent = false;
+            int answerStatus = 0;
+
             Stream? requestBody = null;
             try
             {
@@ -290,26 +297,120 @@ namespace BetterWebLauncher
                 else if (request.IsChunked)
                     requestBody = new ChunkedReadStream(client);
 
-                var (upstream, endpoint) = await ConnectUpstreamAsync(rule, request.Host, ct).ConfigureAwait(false);
-                usedEndpoint = endpoint;
+                var headBytes = request.ToWireBytes(rule.UpstreamHost ?? request.Host, rule.StripCookies,
+                    remote is IPEndPoint ip ? ip.Address.ToString() : null);
 
-                using (upstream)
+                var conn = await ConnectUpstreamAsync(rule, request.Host, ct).ConfigureAwait(false);
+                usedEndpoint = conn.Endpoint;
+
+                // 上游连接上读到的字节全部记下来。SslStream 的 ReadAsync 可能读回
+                // 整整一个 TLS 记录（远远多于请求的那 1 个字节），所以必须是把
+                // "已经消费掉的字节"记下来再补齐，而不是去猜上游会回多少。
+                HeadRecordingStream? recorded = new HeadRecordingStream(conn.Stream, Array.Empty<byte>());
+
+                int status = 0;
+                bool sent = false;
+
+                // 先原样把请求发出去，再拿回响应头。上游回 5xx（Cloudflare 522 /
+                // 网关超时之类）说明这条线路当下不行：本地上游连接还开着，请求
+                // 原样重放到下一条线路，浏览器那边一点都感觉不到。
+                var attempts = Math.Max(1, Math.Min(AccelRules.MaxAttempts, rule.Endpoints.Length));
+                for (int attempt = 1; attempt <= attempts; attempt++)
                 {
-                    var head = request.ToWireBytes(rule.UpstreamHost ?? request.Host, rule.StripCookies,
-                        remote is IPEndPoint ip ? ip.Address.ToString() : null);
+                    try
+                    {
+                        if (!sent)
+                        {
+                            await recorded.WriteAsync(headBytes, ct).ConfigureAwait(false);
+                            await recorded.FlushAsync(ct).ConfigureAwait(false);
 
-                    await upstream.WriteAsync(head, ct).ConfigureAwait(false);
-                    await upstream.FlushAsync(ct).ConfigureAwait(false);
+                            if (requestBody != null)
+                                await CopyStreamAsync(requestBody, recorded, ct).ConfigureAwait(false);
 
-                    if (requestBody != null)
-                        await CopyStreamAsync(requestBody, upstream, ct).ConfigureAwait(false);
+                            sent = true;
+                        }
+                    }
+                    catch (IOException) when (headSent)
+                    {
+                        // 响应头已经回写给浏览器了，写请求体时才断开。
+                        break;
+                    }
 
-                    var status = await ForwardResponseAsync(upstream, client, rule, ct).ConfigureAwait(false);
+                    int headStatus;
+                    try
+                    {
+                        var probeHead = await ReadHeaderBlockFromAsync(recorded, ct).ConfigureAwait(false);
 
-                    MarkHealthy(usedEndpoint);
-                    Report(request.Host, endpoint, rule.Id, status > 0, status,
-                        Environment.TickCount64 - started, null);
+                        if (probeHead.Length >= 5 &&
+                            probeHead[0] == (byte)'H' && probeHead[1] == (byte)'T' && probeHead[2] == (byte)'T' &&
+                            probeHead[3] == (byte)'P')
+                            headStatus = ParseStatusCode(Encoding.ASCII.GetString(probeHead));
+                        else
+                        {
+                            // 响应开头不是 HTTP 状态行，当成普通连接问题换线路。
+                            headStatus = 0;
+                            throw new IOException("上游返回了无法识别的响应");
+                        }
+
+                        // 上游回 5xx 说明这条线路当下不行：还没往浏览器写过一个字节，
+                        // 直接换下一条线路重来，浏览器那边一点都感觉不到。
+                        if (headStatus >= 500 && attempt < attempts)
+                        {
+                            MarkUnhealthy(usedEndpoint);
+                            Report(request.Host, usedEndpoint, rule.Id, false, headStatus,
+                                Environment.TickCount64 - started, "upstream " + headStatus + ", retrying");
+
+                            await recorded.DisposeAsync().ConfigureAwait(false);
+                            conn = await ConnectUpstreamAsync(rule, request.Host, ct).ConfigureAwait(false);
+                            usedEndpoint = conn.Endpoint;
+                            recorded = new HeadRecordingStream(conn.Stream, Array.Empty<byte>());
+                            continue;
+                        }
+
+                        // 把已经替浏览器读掉的那段字节原样还回去。这里绝对不能做任何
+                        // 头部与正文的切分：空行分隔符里也含有连续换行，按连续换行切会
+                        // 把状态行之后的内容整段丢掉，浏览器就会看到残缺响应。
+                        await client.WriteAsync(probeHead, ct).ConfigureAwait(false);
+                        await client.FlushAsync(ct).ConfigureAwait(false);
+
+                        headSent = true;
+                        status = headStatus;
+                        answerStatus = headStatus;
+                        break;
+                    }
+                    catch (IOException ex)
+                    {
+                        if (headSent) break;
+
+                        if (attempt >= attempts)
+                            throw new IOException("上游没有返回有效响应：" + ex.Message, ex);
+
+                        MarkUnhealthy(usedEndpoint);
+                        Report(request.Host, usedEndpoint, rule.Id, false, 0,
+                            Environment.TickCount64 - started, ex.Message);
+
+                        await recorded.DisposeAsync().ConfigureAwait(false);
+                        conn = await ConnectUpstreamAsync(rule, request.Host, ct).ConfigureAwait(false);
+                        usedEndpoint = conn.Endpoint;
+                        recorded = new HeadRecordingStream(conn.Stream, Array.Empty<byte>());
+                        continue;
+                    }
                 }
+
+                // 把响应体原样透传给浏览器，然后收工。
+                try
+                {
+                    await CopyStreamAsync(recorded, client, ct).ConfigureAwait(false);
+                    await client.FlushAsync(ct).ConfigureAwait(false);
+                }
+                catch (IOException)
+                {
+                    // 上游传完就 RST，或者浏览器提前断开：响应已经发完了，忽略。
+                }
+
+                MarkHealthy(usedEndpoint);
+                Report(request.Host, usedEndpoint, rule.Id, status > 0, status,
+                    Environment.TickCount64 - started, null);
             }
             catch (Exception ex)
             {
@@ -317,44 +418,40 @@ namespace BetterWebLauncher
                 Report(request.Host, usedEndpoint, rule.Id, false, 0,
                     Environment.TickCount64 - started, ex.Message);
 
-                try
+                if (!headSent)
                 {
-                    await WriteSimpleAsync(client, 502, "Bad Gateway",
-                        "BetterWebLauncher 无法连接上游：" + ex.Message, ct).ConfigureAwait(false);
+                    try
+                    {
+                        await WriteSimpleAsync(client, 502, "Bad Gateway",
+                            "BetterWebLauncher 无法连接上游：" + ex.Message, ct).ConfigureAwait(false);
+                    }
+                    catch { /* 客户端可能已断开 */ }
                 }
-                catch { /* 客户端可能已断开 */ }
             }
         }
 
-        /// <summary>把上游响应（含状态行、头、体）原样回写给客户端，返回状态码。</summary>
-        private static async Task<int> ForwardResponseAsync(
-            SslStream upstream, SslStream client, AccelRule rule, CancellationToken ct)
+        /// <summary>把响应头块拆成"状态行 + 中间的头"和"最后一个 CRLF 之后的字节"。</summary>
+        private static (byte[] Head, byte[] Body) SplitHead(byte[] block)
         {
-            var headBytes = await ReadHeaderBlockAsync(upstream, ct).ConfigureAwait(false);
-            if (headBytes.Length == 0) throw new IOException("上游没有返回任何数据");
-
-            var headText = Encoding.ASCII.GetString(headBytes);
-            int status = ParseStatusCode(headText);
-
-            if (rule.StripCookies)
+            int end = -1;
+            for (int i = 0; i + 1 < block.Length; i++)
             {
-                headText = StripSetCookie(headText);
-                headBytes = Encoding.ASCII.GetBytes(headText);
+                if (block[i] == (byte)'\n' && block[i + 1] == (byte)'\n') { end = i + 2; break; }
+                if (i + 3 < block.Length &&
+                    block[i] == (byte)'\r' && block[i + 1] == (byte)'\n' &&
+                    block[i + 2] == (byte)'\r' && block[i + 3] == (byte)'\n') { end = i + 4; break; }
             }
 
-            await client.WriteAsync(headBytes, ct).ConfigureAwait(false);
+            if (end < 0) return (block, Array.Empty<byte>());
 
-            // 没有 body 的响应直接结束
-            if (status == 204 || status == 304 || (status >= 100 && status < 200))
-            {
-                await client.FlushAsync(ct).ConfigureAwait(false);
-                return status;
-            }
+            var head = new byte[end];
+            Buffer.BlockCopy(block, 0, head, 0, end);
 
-            // 逐字节转发 body：chunked 与 Content-Length 都不需要额外处理，原样透传即可
-            await CopyStreamAsync(upstream, client, ct).ConfigureAwait(false);
-            await client.FlushAsync(ct).ConfigureAwait(false);
-            return status;
+            if (end >= block.Length) return (head, Array.Empty<byte>());
+
+            var rest = new byte[block.Length - end];
+            Buffer.BlockCopy(block, end, rest, 0, rest.Length);
+            return (head, rest);
         }
 
         private static int ParseStatusCode(string head)
@@ -464,20 +561,48 @@ namespace BetterWebLauncher
 
             try
             {
-                var (upstream, endpoint) = await ConnectUpstreamAsync(rule, request.Host, ct).ConfigureAwait(false);
-                usedEndpoint = endpoint;
+                var headBytes = request.ToWireBytes(rule.UpstreamHost ?? request.Host, rule.StripCookies, null);
 
-                using (upstream)
+                var conn = await ConnectUpstreamAsync(rule, request.Host, ct).ConfigureAwait(false);
+                usedEndpoint = conn.Endpoint;
+
+                // 和普通请求走同一套"先记录、再原样回写"的逻辑：升级响应
+                // 也不能丢字节，否则 WebSocket 的 101 会被截断。
+                HeadRecordingStream? recorded = new HeadRecordingStream(conn.Stream, Array.Empty<byte>());
+
+                var attempts = Math.Max(1, Math.Min(AccelRules.MaxAttempts, rule.Endpoints.Length));
+                for (int attempt = 1; attempt <= attempts; attempt++)
                 {
-                    var head = request.ToWireBytes(rule.UpstreamHost ?? request.Host, rule.StripCookies, null);
-                    await upstream.WriteAsync(head, ct).ConfigureAwait(false);
-                    await upstream.FlushAsync(ct).ConfigureAwait(false);
+                    await recorded.WriteAsync(headBytes, ct).ConfigureAwait(false);
+                    await recorded.FlushAsync(ct).ConfigureAwait(false);
 
-                    await RelayAsync(client, upstream, ct).ConfigureAwait(false);
+                    byte[] probeHead;
+                    try
+                    {
+                        probeHead = await ReadHeaderBlockFromAsync(recorded, ct).ConfigureAwait(false);
+                    }
+                    catch (IOException) when (attempt < attempts)
+                    {
+                        MarkUnhealthy(usedEndpoint);
+                        await recorded.DisposeAsync().ConfigureAwait(false);
+                        conn = await ConnectUpstreamAsync(rule, request.Host, ct).ConfigureAwait(false);
+                        usedEndpoint = conn.Endpoint;
+                        recorded = new HeadRecordingStream(conn.Stream, Array.Empty<byte>());
+                        continue;
+                    }
+
+                    await client.WriteAsync(probeHead, ct).ConfigureAwait(false);
+                    await client.FlushAsync(ct).ConfigureAwait(false);
+                    break;
+                }
+
+                using (conn.Stream)
+                {
+                    await RelayAsync(client, recorded, ct).ConfigureAwait(false);
                 }
 
                 MarkHealthy(usedEndpoint);
-                Report(request.Host, usedEndpoint, rule.Id, true, 101,
+                Report(request.Host, conn.Endpoint, rule.Id, true, 101,
                     Environment.TickCount64 - started, null);
             }
             catch (Exception ex)
@@ -572,7 +697,106 @@ namespace BetterWebLauncher
             return (text, port);
         }
 
-        private async Task<(SslStream Stream, string Endpoint)> ConnectUpstreamAsync(
+        /// <summary>
+        /// 换线路的判定：连接失败（异常），或者上游直接回了一个"临时故障"状态码。
+        ///
+        /// 之前只在连接异常时换线路，像 Cloudflare / AWS 边缘偶尔回的 502 会被原样转给浏览器，
+        /// 看起来就是"这个站打不开"。现在这类响应也当作线路故障处理，换一条再试。
+        /// </summary>
+        private static bool ShouldRetryStatus(int status) =>
+            status >= 500 && status != 501 && status != 505;
+
+        /// <summary>只识别响应开头是不是 5xx，不占用上游连接上的任何字节。</summary>
+
+        /// <summary>
+        /// 包一层记下从上游读到的所有字节。做成"泄漏出来"的形式，
+        /// 这样任何一次 ReadAsync 想多读多少都不会把响应头的开头吞掉。
+        /// </summary>
+        private sealed class HeadRecordingStream : Stream
+        {
+            private readonly Stream _inner;
+            private readonly MemoryStream _prefix;
+            private int _offset;
+
+            public HeadRecordingStream(Stream inner, byte[] prefix)
+            {
+                _inner = inner;
+                _prefix = new MemoryStream();
+                _prefix.Write(prefix, 0, prefix.Length);
+                _prefix.Position = 0;
+            }
+
+            public byte[] Captured => _prefix.ToArray();
+
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => _inner.CanWrite;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+
+            public override int Read(byte[] buffer, int offset, int count)
+                => ReadAsync(buffer.AsMemory(offset, count), CancellationToken.None).AsTask().GetAwaiter().GetResult();
+
+            public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default)
+            {
+                if (_offset < _prefix.Length)
+                {
+                    _prefix.Position = _offset;
+                    int want = (int)Math.Min(buffer.Length, _prefix.Length - _offset);
+                    int got = await _prefix.ReadAsync(buffer.Slice(0, want), ct).ConfigureAwait(false);
+                    if (got > 0) { _offset += got; return got; }
+                    return 0;
+                }
+
+                int n = await _inner.ReadAsync(buffer, ct).ConfigureAwait(false);
+                if (n > 0)
+                {
+                    // 记下来的字节同时也算"已经被读走"，_offset 必须一起前进，
+                    // 否则这些字节会被当成待回放的缓冲再返回一遍（每个字节重复两次）。
+                    _prefix.Position = _prefix.Length;
+                    await _prefix.WriteAsync(buffer.Slice(0, n), ct).ConfigureAwait(false);
+                    _offset += n;
+                }
+                return n;
+            }
+
+            public override void Write(byte[] buffer, int offset, int count) => _inner.Write(buffer, offset, count);
+            public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken ct)
+                => _inner.WriteAsync(buffer, offset, count, ct);
+            public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default)
+                => _inner.WriteAsync(buffer, ct);
+            public override void Flush() => _inner.Flush();
+            public override Task FlushAsync(CancellationToken ct) => _inner.FlushAsync(ct);
+            public override bool CanTimeout => _inner.CanTimeout;
+            public override int ReadTimeout { get => _inner.ReadTimeout; set => _inner.ReadTimeout = value; }
+            public override int WriteTimeout { get => _inner.WriteTimeout; set => _inner.WriteTimeout = value; }
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing) _inner.Dispose();
+                base.Dispose(disposing);
+            }
+        }
+
+        private static async Task<byte[]> ReadHeaderBlockFromAsync(Stream stream, CancellationToken ct)
+            => await ReadHeaderBlockAsync(stream, ct).ConfigureAwait(false);
+
+        /// <summary>已经建立好的上游连接。</summary>
+        private sealed class UpstreamConnection
+        {
+            public SslStream Stream { get; init; } = null!;
+            public string Endpoint { get; init; } = "";
+        }
+
+        /// <summary>
+        /// 连上游，并且要求它给出一个"能看"的响应。
+        ///
+        /// - 连接/握手失败 → 换下一条线路；
+        /// - 上游回了 5xx（网关超时、Cloudflare 522 这类）→ 也换下一条线路，
+        ///   但只在规则有多条线路时才换，免得把 Twitch 那些必然回 4xx/5xx 的流媒体接口也一起重试。
+        /// </summary>
+        private async Task<UpstreamConnection> ConnectUpstreamAsync(
             AccelRule rule, string clientHost, CancellationToken ct)
         {
             var candidates = HealthyEndpoints(rule);
@@ -583,28 +807,40 @@ namespace BetterWebLauncher
 
             foreach (var endpoint in candidates)
             {
-                if (attempts++ >= Math.Max(1, AccelRules.MaxAttempts * 2)) break;
+                if (attempts++ >= Math.Max(1, AccelRules.MaxAttempts)) break;
+                if (attempts > 1 && RetryDelayMs > 0)
+                {
+                    try { await Task.Delay(RetryDelayMs, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { break; }
+                }
 
                 try
                 {
                     var (host, port) = ParseEndpoint(endpoint, rule.UpstreamPort);
+                    SslStream stream;
 
                     if (rule.Kind == AccelUpstreamKind.DirectIp)
                     {
                         var sni = rule.UpstreamSni ?? clientHost;
-                        var stream = await _connector.ConnectTlsAsync(
+                        stream = await _connector.ConnectTlsAsync(
                             host, port, sni, rule.DialTimeoutMs, clientHost, ct)
                             .ConfigureAwait(false);
-                        return (stream, endpoint);
+                    }
+                    else
+                    {
+                        // 加速中继：endpoint 是域名，连它本身，SNI 用规则里的值（没有就用域名）
+                        var relayHost = _connector.ResolveOriginalHost(host) ?? host;
+                        var relaySni = rule.UpstreamSni ?? relayHost;
+                        stream = await _connector.ConnectTlsAsync(
+                            relayHost, port, relaySni, rule.DialTimeoutMs, clientHost, ct)
+                            .ConfigureAwait(false);
                     }
 
-                    // 加速中继：endpoint 是域名，连它本身，SNI 用规则里的值（没有就用域名）
-                    var relayHost = _connector.ResolveOriginalHost(host) ?? host;
-                    var relaySni = rule.UpstreamSni ?? relayHost;
-                    var relayStream = await _connector.ConnectTlsAsync(
-                        relayHost, port, relaySni, rule.DialTimeoutMs, clientHost, ct)
-                        .ConfigureAwait(false);
-                    return (relayStream, endpoint);
+                    return new UpstreamConnection { Stream = stream, Endpoint = endpoint };
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -614,6 +850,59 @@ namespace BetterWebLauncher
             }
 
             throw new IOException("所有上游均不可用：" + (last?.Message ?? "未知错误"), last);
+        }
+
+        /// <summary>
+        /// 把请求发给上游，然后只看响应状态码的第一个数字。
+        ///
+        /// SslStream 是带缓冲的：读 1 个字节不会让后面的响应头丢失，
+        /// 所以看出是 5xx 时可以直接丢掉这条连接、换下一条线路重来；
+        /// 请求体这时还没开始从客户端抽（LimitedReadStream 是惰性的），重发不会出错。
+        /// </summary>
+
+        /// <summary>
+        /// 从上游读走完整的状态行 + 响应头，写进 <paramref name="buffer"/>。
+        /// 返回状态码；<c>false</c> 表示还没读到状态行就没有响应体了（拿不到可用响应）。
+        /// </summary>
+        private static async Task<(int Status, bool Ok)> ReadUpstreamHeadAsync(
+            Stream upstream, MemoryStream buffer, CancellationToken ct)
+        {
+            var pending = new List<byte>(512);
+            var line = new List<byte>(256);
+            bool first = true;
+            int status = 0;
+
+            while (buffer.Length < MaxHeaderBytes)
+            {
+                var one = new byte[1];
+                int n = await upstream.ReadAsync(one.AsMemory(0, 1), ct).ConfigureAwait(false);
+                if (n <= 0) return (status, false);
+
+                line.Add(one[0]);
+                pending.Add(one[0]);
+
+                if (one[0] != (byte)'\n') continue;
+
+                var text = System.Text.Encoding.ASCII.GetString(line.ToArray()).TrimEnd('\r', '\n');
+                line.Clear();
+
+                if (first)
+                {
+                    var parts = text.Split(' ');
+                    if (parts.Length < 2 || !int.TryParse(parts[1], out status)) return (0, false);
+
+                    first = false;
+                    continue;
+                }
+
+                if (text.Length == 0)
+                {
+                    buffer.Write(pending.ToArray(), 0, pending.Count);
+                    return (status, true);
+                }
+            }
+
+            return (status, false);
         }
 
         private List<string> HealthyEndpoints(AccelRule rule)

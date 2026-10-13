@@ -7,7 +7,7 @@ namespace BetterWebLauncher
     /// <summary>
     /// 网站访问加速的服务选择窗口。
     ///
-    /// 只开放「加速哪些站点」这一个选择：GitHub 一组、Discord 一组。
+    /// 只开放「加速哪些站点」这一个选择：GitHub / Steam / Twitch 各一组。
     /// 具体线路、域名、负载均衡参数都已经固化在 <see cref="AccelRules"/> 里，
     /// 没有必要（也不应该）让用户手工填。
     /// </summary>
@@ -19,7 +19,8 @@ namespace BetterWebLauncher
         private static readonly Color CardSurface = VsTheme.CardBg;
 
         private VsCheckBox _chkGitHub = null!;
-        private VsCheckBox _chkDiscord = null!;
+        private VsCheckBox _chkSteam = null!;
+        private VsCheckBox _chkTwitch = null!;
         private VsButton _btnOk = null!;
         private VsButton _btnCancel = null!;
 
@@ -49,7 +50,7 @@ namespace BetterWebLauncher
         private void BuildUi()
         {
             Text = "BetterWebLauncher · 加速设置";
-            ClientSize = new Size(600, 400);
+            ClientSize = new Size(620, 470);
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
@@ -71,7 +72,7 @@ namespace BetterWebLauncher
             root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));   // 标题
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));   // 说明
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));   // 服务卡片
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 122));  // 服务卡片
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 96));   // 证书区
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));   // 提示
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));   // 按钮
@@ -110,13 +111,13 @@ namespace BetterWebLauncher
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 2,
+                RowCount = 3,
                 BackColor = CardSurface,
-                Padding = new Padding(16, 10, 16, 10),
+                Padding = new Padding(16, 8, 16, 8),
                 Margin = new Padding(0)
             };
-            cardRow.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-            cardRow.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
+            for (int i = 0; i < 3; i++)
+                cardRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100F / 3F));
 
             _chkGitHub = new VsCheckBox
             {
@@ -127,17 +128,27 @@ namespace BetterWebLauncher
                 Margin = new Padding(0)
             };
 
-            _chkDiscord = new VsCheckBox
+            _chkSteam = new VsCheckBox
             {
-                Text = "Discord（主站 / 客户端更新 / 邀请链接 / 图片媒体 / 语音）",
+                Text = "Steam（商店 / 登录 / 帮助 / 社区 / 创意工坊）",
                 Dock = DockStyle.Fill,
-                Checked = _settings.AccelDiscord,
+                Checked = _settings.AccelSteam,
+                BackColor = CardSurface,
+                Margin = new Padding(0)
+            };
+
+            _chkTwitch = new VsCheckBox
+            {
+                Text = "Twitch（主站 / 播放器 / 直播流 / 视频点播）",
+                Dock = DockStyle.Fill,
+                Checked = _settings.AccelTwitch,
                 BackColor = CardSurface,
                 Margin = new Padding(0)
             };
 
             cardRow.Controls.Add(_chkGitHub, 0, 0);
-            cardRow.Controls.Add(_chkDiscord, 0, 1);
+            cardRow.Controls.Add(_chkSteam, 0, 1);
+            cardRow.Controls.Add(_chkTwitch, 0, 2);
             card.Controls.Add(cardRow);
             root.Controls.Add(card, 0, 2);
 
@@ -167,7 +178,7 @@ namespace BetterWebLauncher
 
             root.Controls.Add(new VsLabel
             {
-                Text = "说明：这里只加速 GitHub、Discord 这类没有主动封锁国内访问、只是线路绕远的站点；\r\n" +
+                Text = "说明：这里只加速 GitHub、Steam、Twitch 这类没有主动封锁国内访问、只是线路绕远的站点；\r\n" +
                        "已被对方主动限制的服务不在本功能范围内。关闭开关会立即清除全部 hosts 条目。",
                 Dock = DockStyle.Fill,
                 Font = VsTheme.Ui(8.5F),
@@ -225,7 +236,7 @@ namespace BetterWebLauncher
 
         private void Save()
         {
-            if (!_chkGitHub.Checked && !_chkDiscord.Checked)
+            if (!_chkGitHub.Checked && !_chkSteam.Checked && !_chkTwitch.Checked)
             {
                 MessageBox.Show(this, "至少要选择一项要加速的服务。", "加速设置",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -233,7 +244,9 @@ namespace BetterWebLauncher
             }
 
             _settings.AccelGitHub = _chkGitHub.Checked;
-            _settings.AccelDiscord = _chkDiscord.Checked;
+            _settings.AccelSteam = _chkSteam.Checked;
+            _settings.AccelDiscord = false;   // 暂不启用
+            _settings.AccelTwitch = _chkTwitch.Checked;
 
             DialogResult = DialogResult.OK;
             Close();

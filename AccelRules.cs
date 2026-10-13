@@ -79,11 +79,11 @@ namespace BetterWebLauncher
         /// <summary>上游失败后冷却时长：这段时间内不再选它。</summary>
         public const int FailDurationMs = 30000;
 
-        /// <summary>连续失败多少次后判定不可用。</summary>
-        public const int MaxFails = 2;
+        /// <summary>失败多少次后判定不可用。线路本来就不多，一次失败就该换。</summary>
+        public const int MaxFails = 1;
 
         /// <summary>每条上游最多尝试次数。</summary>
-        public const int MaxAttempts = 2;
+        public const int MaxAttempts = 3;
 
         public static readonly AccelRule[] All = BuildAll();
 
@@ -305,6 +305,204 @@ namespace BetterWebLauncher
                     "3.ghedu.steam302.xyz", "4.ghedu.steam302.xyz",
                 },
                 UpstreamSni = "Github",
+            },
+
+            // ============================ Steam ============================
+
+            new AccelRule
+            {
+                Id = "steam-store",
+                Group = "Steam",
+                Description = "Steam 商店 / 登录 / 帮助 / 结算（Akamai 边缘，SNI 前置）",
+                Domains = new[]
+                {
+                    "store.steampowered.com", "help.steampowered.com", "login.steampowered.com",
+                    "checkout.steampowered.com", "store.akamai.steamstatic.com",
+                },
+                Kind = AccelUpstreamKind.DirectIp,
+                Endpoints = new[]
+                {
+                    "steamuserimages-a.akamaihd.net.edgesuite.net",
+                    "steamstore-a.akamaihd.net.edgesuite.net",
+                    "steamcommunity-a.akamaihd.net.edgesuite.net",
+                    "eaassets-a.akamaihd.net.edgesuite.net",
+                },
+                UpstreamSni = "img-s-msn-com.akamaized.net",
+            },
+
+            new AccelRule
+            {
+                Id = "steam-community",
+                Group = "Steam",
+                Description = "Steam 社区 / 个人主页 / 创意工坊（Akamai 边缘，SNI 前置）",
+                Domains = new[] { "steamcommunity.com", "www.steamcommunity.com" },
+                Kind = AccelUpstreamKind.DirectIp,
+                Endpoints = new[]
+                {
+                    "steamcommunity-a.akamaihd.net.edgesuite.net",
+                    "steamstore-a.akamaihd.net.edgesuite.net",
+                    "steamuserimages-a.akamaihd.net.edgesuite.net",
+                },
+                UpstreamSni = "img-s-msn-com.akamaized.net",
+            },
+
+            // ============================ Twitch ============================
+
+            new AccelRule
+            {
+                Id = "twitch-main",
+                Group = "Twitch",
+                Description = "Twitch 主站 / 播放器 / 接口 / 直播聊天（Fastly 边缘）",
+                Domains = new[]
+                {
+                    "twitch.tv", "www.twitch.tv", "m.twitch.tv", "app.twitch.tv", "auth.twitch.tv",
+                    "clips.twitch.tv", "dashboard.twitch.tv", "appeals.twitch.tv", "gql.twitch.tv",
+                    "player.twitch.tv", "api.twitch.tv", "panels.twitch.tv", "spade.twitch.tv",
+                    "trowel.twitch.tv", "irc-ws.chat.twitch.tv", "irc-ws-r.chat.twitch.tv",
+                },
+                Kind = AccelUpstreamKind.RelayDomain,
+                Endpoints = new[] { "twitch.map.fastly.net" },
+            },
+
+            new AccelRule
+            {
+                Id = "twitch-ash",
+                Group = "Twitch",
+                Description = "Twitch 视频分片接入（AWS 边缘）",
+                Domains = new[] { "*.pdx01.abs.hls.ttvnw.net" },
+                Kind = AccelUpstreamKind.RelayDomain,
+                Endpoints = new[] { "science-edge-external-prod-73889260.us-west-2.elb.amazonaws.com" },
+                EnableHosts = false,
+            },
+
+            new AccelRule
+            {
+                Id = "twitch-cdn-group",
+                Group = "Twitch",
+                Description = "Twitch 开发者 / 帮助 / 品牌等站点（CloudFront 边缘，SNI 前置）",
+                Domains = new[]
+                {
+                    "vod-storyboards.twitch.tv", "vod-metro.twitch.tv", "music.twitch.tv",
+                    "player.m7g.twitch.tv", "blog.twitch.tv", "help.twitch.tv", "brand.twitch.tv",
+                    "inspector.twitch.tv", "dev.twitch.tv", "extensions-discovery-images.twitch.tv",
+                },
+                Kind = AccelUpstreamKind.DirectIp,
+                Endpoints = new[]
+                {
+                    "c.media-amazon.com", "ml.media-amazon.com",
+                    "a0.awsstatic.com", "pv.media-amazon.com",
+                },
+                UpstreamSni = "d2mb634i1sflda.cloudfront.net",
+            },
+
+            new AccelRule
+            {
+                Id = "twitch-vod-group",
+                Group = "Twitch",
+                Description = "Twitch 点播与视频素材（CloudFront 边缘，SNI 前置）",
+                Domains = new[]
+                {
+                    "vod-secure.twitch.tv", "production.assets.clips.twitchcdn.net",
+                },
+                Kind = AccelUpstreamKind.DirectIp,
+                Endpoints = new[]
+                {
+                    "c.media-amazon.com", "ml.media-amazon.com",
+                    "a0.awsstatic.com", "pv.media-amazon.com",
+                },
+                UpstreamSni = "ds0h3roq6wcgc.cloudfront.net",
+            },
+
+            new AccelRule
+            {
+                Id = "twitch-assets",
+                Group = "Twitch",
+                Description = "Twitch 站点素材（CloudFront 边缘，固定 Host）",
+                Domains = new[] { "assets.twitch.tv" },
+                Kind = AccelUpstreamKind.DirectIp,
+                Endpoints = new[]
+                {
+                    "c.media-amazon.com", "ml.media-amazon.com",
+                    "a0.awsstatic.com", "pv.media-amazon.com",
+                },
+                UpstreamSni = "static.twitchcdn.net",
+                UpstreamHost = "static.twitchcdn.net",
+            },
+
+            new AccelRule
+            {
+                Id = "twitch-cdn-rt",
+                Group = "Twitch",
+                Description = "Twitch 直播流分发（AWS 边缘）",
+                Domains = new[] { "static-cdn.jtvnw.net" },
+                Kind = AccelUpstreamKind.RelayDomain,
+                Endpoints = new[] { "science-edge-external-prod-73889260.us-west-2.elb.amazonaws.com" },
+                UpstreamSni = "static-cdn.jtvnw.net",
+            },
+
+            new AccelRule
+            {
+                Id = "twitch-relay-mail",
+                Group = "Twitch",
+                Description = "Twitch 邮件 / 登录 / 账号 CDN（加速中继）",
+                Domains = new[] { "assets.help.twitch.tv", "passport.twitch.tv", "id-cdn.twitch.tv" },
+                Kind = AccelUpstreamKind.RelayDomain,
+                Endpoints = new[]
+                {
+                    "ashelpttv.steam302.xyz", "passttv.steam302.xyz", "idcdnttv.steam302.xyz",
+                },
+            },
+
+            new AccelRule
+            {
+                Id = "twitch-ttv",
+                Group = "Twitch",
+                Description = "Twitch 账号 / 事件订阅 / 推流入口 / 聊天（加速中继）",
+                Domains = new[]
+                {
+                    "id.twitch.tv", "pubsub-edge.twitch.tv", "ingest.twitch.tv",
+                    "discuss.dev.twitch.tv",
+                },
+                Kind = AccelUpstreamKind.RelayDomain,
+                Endpoints = new[]
+                {
+                    "2973c6ca0e111662ed293b57dbae9fbf.steam302.xyz",
+                    "522c432cc10e237a02fa1d6481d7d247.steam302.xyz",
+                    "b3d696173d52b66e1caab6145cb5058b.steam302.xyz",
+                    "890c88446f94f25bd32a3f1e0df6c120.steam302.xyz",
+                },
+                UpstreamSni = "ttv",
+            },
+
+            new AccelRule
+            {
+                Id = "twitch-usher",
+                Group = "Twitch",
+                Description = "Twitch 播放列表获取（加速中继）",
+                Domains = new[] { "usher.ttvnw.net" },
+                Kind = AccelUpstreamKind.RelayDomain,
+                Endpoints = new[] { "634d6519809b2734de8cc8aa317c7f28.steam302.xyz" },
+                UpstreamSni = "usher.ttvnw.net",
+            },
+
+            new AccelRule
+            {
+                Id = "twitch-cvp",
+                Group = "Twitch",
+                Description = "Twitch 视频云处理（Akamai 边缘）",
+                Domains = new[] { "cvp.twitch.tv" },
+                Kind = AccelUpstreamKind.RelayDomain,
+                Endpoints = new[] { "e9221.i.akamaiedge.net" },
+            },
+
+            new AccelRule
+            {
+                Id = "twitch-safety",
+                Group = "Twitch",
+                Description = "Twitch 安全中心（专用边缘）",
+                Domains = new[] { "safety.twitch.tv" },
+                Kind = AccelUpstreamKind.RelayDomain,
+                Endpoints = new[] { "accessibility.acapqa.net" },
             },
 
             // ============================ Discord ============================

@@ -5,7 +5,7 @@ Windows 宽带（PPPoE）自动拨号 + 断线自动重连小工具，采用 VS 
 程序启动后自动调用系统 `rasdial` 拨号；运行期间每秒检测一次网络接口状态，
 一旦掉线就按设定的间隔自动重拨，并把日志写到界面上。除了拨号本身，
 还带一个整机 / 本程序的资源占用监视面板，以及内置的 **网站访问加速**
-（GitHub / Discord 这类线路绕远的站点，加速能力直接做进了程序）。
+（GitHub / Steam / Twitch 这类线路绕远的站点，加速能力直接做进了程序）。
 
 ---
 
@@ -15,7 +15,7 @@ Windows 宽带（PPPoE）自动拨号 + 断线自动重连小工具，采用 VS 
 | --- | --- |
 | 自动拨号 | 启动即拨号，连接名 / 账号 / 密码可配置 |
 | 断线自动重连 | 每秒检测接口状态，掉线后按设定间隔重试（1–3600 秒可调） |
-| 网站访问加速 | 内置本地代理，加速 GitHub / Discord 等线路绕远的站点 |
+| 网站访问加速 | 内置本地代理，加速 GitHub / Steam / Twitch 等线路绕远的站点 |
 | 记住密码 | 密码 AES 加密后存入本地配置，不落明文 |
 | 在线状态显示 | 实时显示连接状态、IP 地址、收发流量 |
 | 系统资源监控 | 整机 CPU / 内存占用、本程序 CPU / 内存 / 线程数 |
@@ -27,7 +27,7 @@ Windows 宽带（PPPoE）自动拨号 + 断线自动重连小工具，采用 VS 
 
 ## 网站访问加速
 
-内置了本地加速代理，针对 GitHub / Discord 这类**并没有主动封锁国内访问、只是线路绕远**
+内置了本地加速代理，针对 GitHub / Steam / Twitch 这类**并没有主动封锁国内访问、只是线路绕远**
 的站点。它不做任何"翻墙"的事：域名和线路都是这些服务本来就对外开放的入口，
 只是把绕远的路径换成了更近的一条。
 
@@ -39,10 +39,13 @@ Windows 宽带（PPPoE）自动拨号 + 断线自动重连小工具，采用 VS 
 
 覆盖范围（规则见 `AccelRules.cs`）：
 
+> Discord 的固定线路目前会被对端重置，暂时没有列入加速范围，规则仍保留在代码里待线路恢复。
+
 | 服务 | 覆盖的域名 |
 | --- | --- |
 | GitHub | `github.com`、`api.github.com`、`codeload`、`raw/avatars/objects.githubusercontent.com`、`*.github.io`、`github.githubassets.com` 等 |
-| Discord | `discord.com`、`discordapp.com`、`*.discord.gg`、`cdn/media/images-ext.discordapp.net`、`dl/dl2.discordapp.net`、各状态与支持站点 |
+| Steam | `store/help/login/checkout.steampowered.com`、`store.akamai.steamstatic.com`、`steamcommunity.com` |
+| Twitch | `twitch.tv` 全站（`www/m/app/auth/clips/dashboard/appeals/player/panels/spade/trowel` 等）、`gql/api/id/passport/id-cdn.twitch.tv`、`usher.ttvnw.net`、`static-cdn.jtvnw.net`、`*.pdx01.abs.hls.ttvnw.net`、点播与素材站点 |
 
 只用**宿主文件 + 本地代理**这一种机制，没有驱动、没有系统服务、没有常驻后台进程：
 
@@ -59,7 +62,7 @@ Windows 宽带（PPPoE）自动拨号 + 断线自动重连小工具，采用 VS 
 程序需要以**管理员身份**运行（改写 `hosts` 与监听 443 端口），
 `app.manifest` 里已声明 `requireAdministrator`，双击时会自动弹 UAC。
 
-> 说明：这里只加速 GitHub、Discord 这类并没有主动封锁国内访问、只是线路绕远的站点；
+> 说明：这里只加速 GitHub、Steam、Twitch 这类并没有主动封锁国内访问、只是线路绕远的站点；
 > 已被对方主动限制的服务不在本功能范围内。
 
 ---
@@ -112,7 +115,8 @@ dotnet publish -c Release
 | `ReconnectIntervalSeconds` | `5` | 重连重试间隔（秒） |
 | `AccelerationEnabled` | `false` | 网站访问加速总开关 |
 | `AccelGitHub` | `true` | 加速 GitHub 系列域名 |
-| `AccelDiscord` | `true` | 加速 Discord 系列域名 |
+| `AccelSteam` | `true` | 加速 Steam 系列域名 |
+| `AccelTwitch` | `true` | 加速 Twitch 系列域名 |
 | `AccelPort` | `443` | 本地代理监听端口（hosts 只能指向 443，一般不改） |
 | `AccelCaTrusted` | `false` | 本地根证书是否已装进受信任根 |
 
@@ -138,7 +142,7 @@ dotnet publish -c Release
 | `AccelUpstream.cs` | 上游连接：指定 IP/SNI 建 TLS，绕过被污染的解析结果 |
 | `AccelTls.cs` | ClientHello 解析（读 SNI）、加速日志与统计 |
 | `HostsFile.cs` | 带标记地改写 `hosts`，只动自己的条目并即时刷新 DNS 缓存 |
-| `AccelSettingsForm.cs` | 加速服务选择窗口（GitHub / Discord 分开开关） |
+| `AccelSettingsForm.cs` | 加速服务选择窗口（GitHub / Steam / Twitch 分开开关） |
 | `StartupManager.cs` | 通过 `HKCU` 的 `Run` 项实现开机自启 |
 | `PerfForm.cs` | 性能监视窗口（整机 + 本程序资源曲线） |
 | `VsTheme.cs` | VS Code 风格配色与主题常量 |

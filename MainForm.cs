@@ -467,7 +467,7 @@ namespace BetterWebLauncher
 
             _chkAcceleration = new VsCheckBox
             {
-                Text = "网站访问加速 (GitHub / Discord)",
+                Text = "网站访问加速 (GitHub / Steam / Discord / Twitch)",
                 Dock = DockStyle.Fill,
                 Checked = _settings.AccelerationEnabled,
                 BackColor = CardSurface,
@@ -573,7 +573,7 @@ namespace BetterWebLauncher
                 try { _settings.Save(); } catch { }
 
                 Log($"网站访问加速已启动：{written} 个域名 → 127.0.0.1:{_settings.AccelPort}" +
-                    $"（{(_settings.AccelGitHub ? "GitHub" : "")}{(_settings.AccelGitHub && _settings.AccelDiscord ? " + " : "")}{(_settings.AccelDiscord ? "Discord" : "")}）。",
+                    $"（{SelectedServiceNames()}）。",
                     LogLevel.Success);
             }
             catch (Exception ex)
@@ -619,11 +619,28 @@ namespace BetterWebLauncher
             foreach (var rule in AccelRules.All)
             {
                 if (rule.Group == "GitHub" && !_settings.AccelGitHub) continue;
-                if (rule.Group == "Discord" && !_settings.AccelDiscord) continue;
+                if (rule.Group == "Steam" && !_settings.AccelSteam) continue;
+                // Discord 暂不参与：原来那批固定线路（162.159.x.x）现在会被对端直接重置，
+                // 在找到稳定线路之前不把它写进 hosts，免得浏览器一直卡在超时。
+                if (rule.Group == "Discord") continue;
+                if (rule.Group == "Twitch" && !_settings.AccelTwitch) continue;
                 list.Add(rule);
             }
 
             return list.ToArray();
+        }
+
+        /// <summary>当前勾选的服务名，用于日志与状态显示。</summary>
+        private string SelectedServiceNames()
+        {
+            var names = new System.Collections.Generic.List<string>();
+            if (_settings.AccelGitHub) names.Add("GitHub");
+            if (_settings.AccelSteam) names.Add("Steam");
+            if (_settings.AccelTwitch) names.Add("Twitch");
+            if (names.Count == 0) return "未选择任何服务";
+
+            return string.Join(" + ", names) +
+                   $" · {SelectedAccelRules().Length} 组规则";
         }
 
         private System.Collections.Generic.List<string> SelectedAccelDomains()
@@ -654,7 +671,7 @@ namespace BetterWebLauncher
             {
                 var stats = _accel.Stats;
                 _lblAccelState.Text = $"运行中 · {HostsFile.CountApplied()} 个域名 · " +
-                                      $"{stats.Total} 次请求";
+                                      $"{stats.Total} 次请求 · {SelectedServiceNames()}";
                 _lblAccelState.ForeColor = VsTheme.Accent;
             }
             else

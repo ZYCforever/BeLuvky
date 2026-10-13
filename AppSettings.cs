@@ -38,8 +38,14 @@ namespace BetterWebLauncher
         /// <summary>是否同时加速 GitHub 系列域名。</summary>
         public bool AccelGitHub { get; set; } = true;
 
-        /// <summary>是否同时加速 Discord 系列域名。</summary>
-        public bool AccelDiscord { get; set; } = true;
+        /// <summary>旧版本的 Discord 开关，保留字段只为读得懂老配置文件；当前不启用。</summary>
+        public bool AccelDiscord { get; set; } = false;
+
+        /// <summary>是否同时加速 Steam 系列域名。</summary>
+        public bool AccelSteam { get; set; } = true;
+
+        /// <summary>是否同时加速 Twitch 系列域名。</summary>
+        public bool AccelTwitch { get; set; } = true;
 
         /// <summary>本地监听端口。hosts 只能劫持到 443，一般不需要改。</summary>
         public int AccelPort { get; set; } = 443;
